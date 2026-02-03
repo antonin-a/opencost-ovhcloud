@@ -495,9 +495,52 @@ func (o *OVH) ServiceAccountStatus() *models.ServiceAccountStatus {
 	return &models.ServiceAccountStatus{Checks: checks}
 }
 
-// ClusterManagementPricing returns cluster management pricing (MKS control plane is free)
-func (*OVH) ClusterManagementPricing() (string, float64, error) {
-	return "", 0.0, nil
+// ClusterManagementPricing returns cluster management pricing
+// MKS has two tiers: "free" (0 EUR/h) and "standard" (0.09 EUR/h)
+// This method attempts to detect the tier from the API
+func (o *OVH) ClusterManagementPricing() (string, float64, error) {
+	if o.client == nil {
+		// No API client, assume free tier
+		return "MKS Free", 0.0, nil
+	}
+
+	projectID := env.GetOVHProjectID()
+	if projectID == "" {
+		return "MKS Free", 0.0, nil
+	}
+
+	// Try to get usage to determine the actual tier
+	var usage struct {
+		HourlyUsage struct {
+			ManagedKubernetesService []struct {
+				Reference  string `json:"reference"`
+				TotalPrice struct {
+					Value float64 `json:"value"`
+				} `json:"totalPrice"`
+				Quantity struct {
+					Value int `json:"value"`
+				} `json:"quantity"`
+			} `json:"managedKubernetesService"`
+		} `json:"hourlyUsage"`
+	}
+
+	err := o.client.Get(fmt.Sprintf("/cloud/project/%s/usage/current", projectID), &usage)
+	if err != nil {
+		log.Warnf("Failed to get MKS usage, assuming free tier: %v", err)
+		return "MKS Free", 0.0, nil
+	}
+
+	// Calculate hourly cost from usage data
+	for _, mks := range usage.HourlyUsage.ManagedKubernetesService {
+		if mks.Reference == "standard" && mks.Quantity.Value > 0 {
+			// Standard tier: 0.09 EUR/hour
+			hourlyRate := mks.TotalPrice.Value / float64(mks.Quantity.Value)
+			return "MKS Standard", hourlyRate, nil
+		}
+	}
+
+	// Default to free tier
+	return "MKS Free", 0.0, nil
 }
 
 // CombinedDiscountForNode returns the combined discount for a node

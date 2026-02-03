@@ -1,0 +1,429 @@
+package ovh
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ovh/go-ovh/ovh"
+
+	"github.com/opencost/opencost/core/pkg/log"
+	"github.com/opencost/opencost/core/pkg/opencost"
+	"github.com/opencost/opencost/pkg/cloud"
+)
+
+// CloudCostIntegration implements the CloudCostIntegration interface for OVH
+type CloudCostIntegration struct {
+	CloudCostConfiguration
+	ConnectionStatus cloud.ConnectionStatus
+}
+
+// UsageResponse represents the OVH usage API response
+type UsageResponse struct {
+	HourlyUsage struct {
+		Instance []struct {
+			Reference      string `json:"reference"`
+			Region         string `json:"region"`
+			DeploymentMode string `json:"deploymentMode"`
+			Quantity       struct {
+				Unit  string `json:"unit"`
+				Value int    `json:"value"`
+			} `json:"quantity"`
+			TotalPrice float64 `json:"totalPrice"`
+			Details    []struct {
+				InstanceID string `json:"instanceId"`
+				ResourceID string `json:"resourceId"`
+				Quantity   struct {
+					Unit  string `json:"unit"`
+					Value int    `json:"value"`
+				} `json:"quantity"`
+				TotalPrice float64 `json:"totalPrice"`
+			} `json:"details"`
+		} `json:"instance"`
+		Volume []struct {
+			Region     string  `json:"region"`
+			Type       string  `json:"type"`
+			TotalPrice float64 `json:"totalPrice"`
+			Details    []struct {
+				VolumeID   string  `json:"volumeId"`
+				TotalPrice float64 `json:"totalPrice"`
+			} `json:"details"`
+		} `json:"volume"`
+		Snapshot []struct {
+			Region     string  `json:"region"`
+			TotalPrice float64 `json:"totalPrice"`
+		} `json:"snapshot"`
+		Storage []struct {
+			Region     string  `json:"region"`
+			Type       string  `json:"type"`
+			TotalPrice float64 `json:"totalPrice"`
+		} `json:"storage"`
+		ManagedKubernetesService []struct {
+			Reference      string `json:"reference"`
+			Region         string `json:"region"`
+			DeploymentMode string `json:"deploymentMode"`
+			Quantity       struct {
+				Value int `json:"value"`
+			} `json:"quantity"`
+			TotalPrice struct {
+				Value float64 `json:"value"`
+			} `json:"totalPrice"`
+			Details []struct {
+				ID         string `json:"id"`
+				ResourceID string `json:"resourceId"`
+				Quantity   struct {
+					Value int `json:"value"`
+				} `json:"quantity"`
+				TotalPrice struct {
+					Value float64 `json:"value"`
+				} `json:"totalPrice"`
+			} `json:"details"`
+		} `json:"managedKubernetesService"`
+		Rancher []struct {
+			Reference  string `json:"reference"`
+			TotalPrice struct {
+				Value float64 `json:"value"`
+			} `json:"totalPrice"`
+			Details []struct {
+				RancherID  string `json:"rancherId"`
+				ResourceID string `json:"resourceId"`
+				Quantity   struct {
+					Value int `json:"value"`
+				} `json:"quantity"`
+				TotalPrice struct {
+					Value float64 `json:"value"`
+				} `json:"totalPrice"`
+			} `json:"details"`
+		} `json:"rancher"`
+	} `json:"hourlyUsage"`
+	ResourcesUsage []struct {
+		Type      string `json:"type"`
+		Resources []struct {
+			Components []struct {
+				ID         string `json:"id"`
+				Name       string `json:"name"`
+				ResourceID string `json:"resourceId"`
+				Quantity   struct {
+					Unit  string `json:"unit"`
+					Value int    `json:"value"`
+				} `json:"quantity"`
+				TotalPrice float64 `json:"totalPrice"`
+			} `json:"components"`
+		} `json:"resources"`
+	} `json:"resourcesUsage"`
+	Period struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"period"`
+}
+
+func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*opencost.CloudCostSetRange, error) {
+	client, err := cci.Authorizer.CreateOVHClient()
+	if err != nil {
+		cci.ConnectionStatus = cloud.FailedConnection
+		return nil, fmt.Errorf("getting OVH client: %w", err)
+	}
+
+	ccsr, err := opencost.NewCloudCostSetRange(start, end, opencost.AccumulateOptionDay, cci.Key())
+	if err != nil {
+		return nil, err
+	}
+
+	// OVH usage API returns data for the current billing period
+	// We need to fetch /cloud/project/{projectID}/usage/current
+	var usage UsageResponse
+	err = client.Get(fmt.Sprintf("/cloud/project/%s/usage/current", cci.ProjectID), &usage)
+	if err != nil {
+		cci.ConnectionStatus = cloud.FailedConnection
+		return nil, fmt.Errorf("failed to fetch OVH usage: %w", err)
+	}
+
+	// Process instances (compute)
+	for _, instance := range usage.HourlyUsage.Instance {
+		for _, detail := range instance.Details {
+			cc := cci.createCloudCost(
+				detail.ResourceID,
+				"Compute",
+				instance.Reference,
+				opencost.ComputeCategory,
+				instance.Region,
+				detail.TotalPrice,
+				start,
+			)
+			ccsr.LoadCloudCost(cc)
+		}
+	}
+
+	// Process volumes (storage)
+	for _, volume := range usage.HourlyUsage.Volume {
+		for _, detail := range volume.Details {
+			cc := cci.createCloudCost(
+				detail.VolumeID,
+				"Block Storage",
+				volume.Type,
+				opencost.StorageCategory,
+				volume.Region,
+				detail.TotalPrice,
+				start,
+			)
+			ccsr.LoadCloudCost(cc)
+		}
+	}
+
+	// Process snapshots
+	for _, snapshot := range usage.HourlyUsage.Snapshot {
+		cc := cci.createCloudCost(
+			"snapshot-"+snapshot.Region,
+			"Snapshot",
+			"snapshot",
+			opencost.StorageCategory,
+			snapshot.Region,
+			snapshot.TotalPrice,
+			start,
+		)
+		ccsr.LoadCloudCost(cc)
+	}
+
+	// Process object storage
+	for _, storage := range usage.HourlyUsage.Storage {
+		cc := cci.createCloudCost(
+			"storage-"+storage.Region,
+			"Object Storage",
+			storage.Type,
+			opencost.StorageCategory,
+			storage.Region,
+			storage.TotalPrice,
+			start,
+		)
+		ccsr.LoadCloudCost(cc)
+	}
+
+	// Process MKS (Managed Kubernetes Service)
+	for _, mks := range usage.HourlyUsage.ManagedKubernetesService {
+		for _, detail := range mks.Details {
+			cc := cci.createCloudCost(
+				detail.ResourceID,
+				"Managed Kubernetes Service",
+				mks.Reference,
+				opencost.ManagementCategory,
+				mks.Region,
+				detail.TotalPrice.Value,
+				start,
+			)
+			ccsr.LoadCloudCost(cc)
+		}
+	}
+
+	// Process Rancher
+	for _, rancher := range usage.HourlyUsage.Rancher {
+		for _, detail := range rancher.Details {
+			cc := cci.createCloudCost(
+				detail.ResourceID,
+				"Rancher",
+				rancher.Reference,
+				opencost.ManagementCategory,
+				"",
+				detail.TotalPrice.Value,
+				start,
+			)
+			ccsr.LoadCloudCost(cc)
+		}
+	}
+
+	// Process resourcesUsage for additional services
+	cci.processResourcesUsage(client, &usage, ccsr, start)
+
+	// Check if we got any data
+	hasData := len(usage.HourlyUsage.Instance) > 0 ||
+		len(usage.HourlyUsage.Volume) > 0 ||
+		len(usage.HourlyUsage.Snapshot) > 0 ||
+		len(usage.HourlyUsage.Storage) > 0 ||
+		len(usage.HourlyUsage.ManagedKubernetesService) > 0 ||
+		len(usage.HourlyUsage.Rancher) > 0 ||
+		len(usage.ResourcesUsage) > 0
+
+	if !hasData && cci.ConnectionStatus != cloud.SuccessfulConnection {
+		cci.ConnectionStatus = cloud.MissingData
+		return ccsr, nil
+	}
+
+	cci.ConnectionStatus = cloud.SuccessfulConnection
+	return ccsr, nil
+}
+
+func (cci *CloudCostIntegration) processResourcesUsage(client *ovh.Client, usage *UsageResponse, ccsr *opencost.CloudCostSetRange, start time.Time) {
+	for _, resourceGroup := range usage.ResourcesUsage {
+		for _, resource := range resourceGroup.Resources {
+			for _, component := range resource.Components {
+				service, category := cci.categorizeResource(component.Name)
+				cc := cci.createCloudCost(
+					component.ResourceID,
+					service,
+					component.Name,
+					category,
+					"",
+					component.TotalPrice,
+					start,
+				)
+				ccsr.LoadCloudCost(cc)
+			}
+		}
+	}
+}
+
+func (cci *CloudCostIntegration) categorizeResource(name string) (string, string) {
+	nameLower := strings.ToLower(name)
+
+	// Databases
+	if strings.Contains(nameLower, "postgresql") {
+		return "Database - PostgreSQL", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "mysql") {
+		return "Database - MySQL", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "mongodb") {
+		return "Database - MongoDB", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "redis") || strings.Contains(nameLower, "valkey") {
+		return "Database - Redis/Valkey", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "kafka") {
+		return "Database - Kafka", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "cassandra") {
+		return "Database - Cassandra", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "opensearch") {
+		return "Database - OpenSearch", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "grafana") {
+		return "Database - Grafana", opencost.OtherCategory
+	}
+	if strings.Contains(nameLower, "m3db") {
+		return "Database - M3DB", opencost.OtherCategory
+	}
+
+	// AI Services
+	if strings.Contains(nameLower, "ai-") || strings.Contains(nameLower, "ai1-") {
+		return "AI Services", opencost.ComputeCategory
+	}
+	if strings.Contains(nameLower, "notebook") {
+		return "AI Notebook", opencost.ComputeCategory
+	}
+	if strings.Contains(nameLower, "training") {
+		return "AI Training", opencost.ComputeCategory
+	}
+
+	// Network
+	if strings.Contains(nameLower, "loadbalancer") {
+		return "Load Balancer", opencost.NetworkCategory
+	}
+	if strings.Contains(nameLower, "gateway") {
+		return "Gateway", opencost.NetworkCategory
+	}
+	if strings.Contains(nameLower, "floatingip") {
+		return "Floating IP", opencost.NetworkCategory
+	}
+	if strings.Contains(nameLower, "ip") {
+		return "Public IP", opencost.NetworkCategory
+	}
+
+	// Registry
+	if strings.Contains(nameLower, "registry") || strings.Contains(nameLower, "plan-equivalent") {
+		return "Container Registry", opencost.StorageCategory
+	}
+
+	// Storage
+	if strings.Contains(nameLower, "archive") {
+		return "Cold Archive", opencost.StorageCategory
+	}
+	if strings.Contains(nameLower, "storage") {
+		return "Object Storage", opencost.StorageCategory
+	}
+
+	// Data Platform
+	if strings.Contains(nameLower, "dataplatform") {
+		return "Data Platform", opencost.OtherCategory
+	}
+
+	// Default
+	return "Other", opencost.OtherCategory
+}
+
+func (cci *CloudCostIntegration) createCloudCost(
+	resourceID string,
+	service string,
+	productName string,
+	category string,
+	region string,
+	cost float64,
+	windowStart time.Time,
+) *opencost.CloudCost {
+	windowEnd := windowStart.AddDate(0, 0, 1)
+
+	labels := opencost.CloudCostLabels{
+		"product": productName,
+	}
+
+	properties := &opencost.CloudCostProperties{
+		ProviderID:      resourceID,
+		Provider:        opencost.OVHProvider,
+		AccountID:       cci.ProjectID,
+		AccountName:     cci.ProjectID,
+		InvoiceEntityID: cci.ProjectID,
+		RegionID:        region,
+		Service:         service,
+		Category:        category,
+		Labels:          labels,
+	}
+
+	return &opencost.CloudCost{
+		Properties: properties,
+		Window:     opencost.NewWindow(&windowStart, &windowEnd),
+		ListCost: opencost.CostMetric{
+			Cost: cost,
+		},
+		NetCost: opencost.CostMetric{
+			Cost: cost,
+		},
+		AmortizedNetCost: opencost.CostMetric{
+			Cost: cost,
+		},
+		AmortizedCost: opencost.CostMetric{
+			Cost: cost,
+		},
+		InvoicedCost: opencost.CostMetric{
+			Cost: cost,
+		},
+	}
+}
+
+func (cci *CloudCostIntegration) GetStatus() cloud.ConnectionStatus {
+	if cci.ConnectionStatus.String() == "" {
+		cci.ConnectionStatus = cloud.InitialStatus
+	}
+	return cci.ConnectionStatus
+}
+
+func (cci *CloudCostIntegration) RefreshStatus() cloud.ConnectionStatus {
+	client, err := cci.Authorizer.CreateOVHClient()
+	if err != nil {
+		cci.ConnectionStatus = cloud.FailedConnection
+		log.Warnf("OVH Cloud Cost: failed to create client: %v", err)
+		return cci.ConnectionStatus
+	}
+
+	// Try a simple API call to verify connection
+	var project struct {
+		ProjectID string `json:"project_id"`
+	}
+	err = client.Get(fmt.Sprintf("/cloud/project/%s", cci.ProjectID), &project)
+	if err != nil {
+		cci.ConnectionStatus = cloud.FailedConnection
+		log.Warnf("OVH Cloud Cost: failed to validate connection: %v", err)
+		return cci.ConnectionStatus
+	}
+
+	cci.ConnectionStatus = cloud.SuccessfulConnection
+	return cci.ConnectionStatus
+}
