@@ -1,0 +1,11 @@
+{
+    "provider": "OVH",
+    "description": "Default prices for OVHcloud Public Cloud. API pricing used when available.",
+    "CPU": "0.031611",
+    "RAM": "0.004237",
+    "GPU": "0.95",
+    "storage": "0.000119",
+    "zoneNetworkEgress": "0.0",
+    "regionNetworkEgress": "0.0",
+    "internetNetworkEgress": "0.0"
+}

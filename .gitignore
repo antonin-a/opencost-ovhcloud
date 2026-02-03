@@ -23,3 +23,8 @@ tilt_config.json
 # Test reports
 coverage.html
 coverage.out
+
+# OVH credentials
+ovh.conf
+pkg/cloud/ovh/ovh.conf
+*.ovh.conf

@@ -40,6 +40,14 @@ const (
 	AzureCurrencyEnvVar   = "AZURE_CURRENCY"
 	AzureRegionInfoEnvVar = "AZURE_REGION_INFO"
 
+	// OVH Cloud Provider
+	OVHApplicationKeyEnvVar    = "OVH_APPLICATION_KEY"
+	OVHApplicationSecretEnvVar = "OVH_APPLICATION_SECRET"
+	OVHConsumerKeyEnvVar       = "OVH_CONSUMER_KEY"
+	OVHEndpointEnvVar          = "OVH_ENDPOINT"
+	OVHProjectIDEnvVar         = "OVH_PROJECT_ID"
+	OVHSubsidiaryEnvVar        = "OVH_SUBSIDIARY"
+
 	// Currently being used for OCI and DigitalOcean
 	ProviderPricingURL = "PROVIDER_PRICING_URL"
 
@@ -242,6 +250,42 @@ func GetAzureCurrency() string {
 // the Azure rate card region filter. This overrides the default region from config if specified.
 func GetAzureRegionInfo() string {
 	return env.Get(AzureRegionInfoEnvVar, "")
+}
+
+// GetOVHApplicationKey returns the environment variable value for OVHApplicationKeyEnvVar which represents
+// the OVH application key for API authentication.
+func GetOVHApplicationKey() string {
+	return env.Get(OVHApplicationKeyEnvVar, "")
+}
+
+// GetOVHApplicationSecret returns the environment variable value for OVHApplicationSecretEnvVar which represents
+// the OVH application secret for API authentication.
+func GetOVHApplicationSecret() string {
+	return env.Get(OVHApplicationSecretEnvVar, "")
+}
+
+// GetOVHConsumerKey returns the environment variable value for OVHConsumerKeyEnvVar which represents
+// the OVH consumer key for API authentication.
+func GetOVHConsumerKey() string {
+	return env.Get(OVHConsumerKeyEnvVar, "")
+}
+
+// GetOVHEndpoint returns the environment variable value for OVHEndpointEnvVar which represents
+// the OVH API endpoint (e.g., "ovh-eu", "ovh-us", "ovh-ca").
+func GetOVHEndpoint() string {
+	return env.Get(OVHEndpointEnvVar, "ovh-eu")
+}
+
+// GetOVHProjectID returns the environment variable value for OVHProjectIDEnvVar which represents
+// the OVH Public Cloud project ID (also called serviceName in the API).
+func GetOVHProjectID() string {
+	return env.Get(OVHProjectIDEnvVar, "")
+}
+
+// GetOVHSubsidiary returns the environment variable value for OVHSubsidiaryEnvVar which represents
+// the OVH subsidiary for pricing catalog (e.g., "FR", "DE", "GB").
+func GetOVHSubsidiary() string {
+	return env.Get(OVHSubsidiaryEnvVar, "FR")
 }
 
 // IsAzureDownloadBillingDataToDisk returns the environment variable value for

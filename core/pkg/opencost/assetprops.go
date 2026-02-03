@@ -193,6 +193,12 @@ const OTCProvider = "OTC"
 // DigitalOceanProvider describes the provider DigitalOcean
 const DigitalOceanProvider = "DigitalOcean"
 
+// OVHProvider describes the provider OVHcloud
+const OVHProvider = "OVH"
+
+// OVHNodepoolLabel describes how OVH labels nodepool nodes
+const OVHNodepoolLabel = "k8s.ovh.net/nodepool"
+
 // NilProvider describes unknown provider
 const NilProvider = "-"
 
@@ -215,6 +221,8 @@ func ParseProvider(str string) string {
 		return OracleProvider
 	case "digitalocean", "doks", "do":
 		return DigitalOceanProvider
+	case "ovh", "ovhcloud":
+		return OVHProvider
 	default:
 		return NilProvider
 	}

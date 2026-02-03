@@ -20,6 +20,7 @@ import (
 	"github.com/opencost/opencost/pkg/cloud/models"
 	"github.com/opencost/opencost/pkg/cloud/oracle"
 	"github.com/opencost/opencost/pkg/cloud/otc"
+	"github.com/opencost/opencost/pkg/cloud/ovh"
 	"github.com/opencost/opencost/pkg/cloud/scaleway"
 
 	"github.com/opencost/opencost/core/pkg/opencost"
@@ -112,6 +113,8 @@ func NewProvider(cache clustercache.ClusterCache, apiKey string, config *config.
 			cp.configFileName = "scaleway.json"
 		case opencost.OTCProvider:
 			cp.configFileName = "otc.json"
+		case opencost.OVHProvider:
+			cp.configFileName = "ovh.json"
 		case opencost.CSVProvider:
 			cp.configFileName = "default.json"
 		}
@@ -209,6 +212,14 @@ func NewProvider(cache clustercache.ClusterCache, apiKey string, config *config.
 			Config:        NewProviderConfig(config, cp.configFileName),
 			ClusterRegion: cp.region,
 		}, nil
+	case opencost.OVHProvider:
+		log.Info("Found OVH node label, using OVH Provider")
+		return &ovh.OVH{
+			Clientset:        cache,
+			Config:           NewProviderConfig(config, cp.configFileName),
+			ClusterRegion:    cp.region,
+			ClusterAccountID: cp.accountID,
+		}, nil
 	case opencost.DigitalOceanProvider:
 		log.Info("Detected DigitalOcean, using DOKS")
 		return &digitalocean.DOKS{
@@ -293,6 +304,10 @@ func getClusterProperties(node *clustercache.Node) clusterProperties {
 		log.Debug("using OTC provider")
 		cp.provider = opencost.OTCProvider
 		cp.configFileName = "otc.json"
+	} else if _, ok := node.Labels["k8s.ovh.net/nodepool"]; ok { // The node label "k8s.ovh.net/nodepool" exists for OVH MKS
+		log.Debug("using OVH provider")
+		cp.provider = opencost.OVHProvider
+		cp.configFileName = "ovh.json"
 	} else if strings.HasPrefix(providerID, "digitalocean") {
 		log.Debug("using DigitalOcean provider")
 		cp.provider = opencost.DigitalOceanProvider
