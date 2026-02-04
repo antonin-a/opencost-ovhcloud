@@ -55,6 +55,7 @@ ADD --chmod=500 ./configs/gcp.json /models/gcp.json
 ADD --chmod=500 ./configs/alibaba.json /models/alibaba.json
 ADD --chmod=500 ./configs/oracle.json /models/oracle.json
 ADD --chmod=500 ./configs/otc.json /models/otc.json
+ADD --chmod=500 ./configs/ovh.json /models/ovh.json
 RUN chown -R 1001:1001 /models
 
 USER 1001
