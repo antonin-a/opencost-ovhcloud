@@ -138,8 +138,21 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 		return nil, fmt.Errorf("failed to fetch OVH usage: %w", err)
 	}
 
+	log.Infof("OVH Cloud Cost: fetched usage data for period %s to %s", usage.Period.From, usage.Period.To)
+	log.Infof("OVH Cloud Cost: instances=%d, volumes=%d, snapshots=%d, storage=%d, mks=%d, rancher=%d, resourcesUsage=%d",
+		len(usage.HourlyUsage.Instance),
+		len(usage.HourlyUsage.Volume),
+		len(usage.HourlyUsage.Snapshot),
+		len(usage.HourlyUsage.Storage),
+		len(usage.HourlyUsage.ManagedKubernetesService),
+		len(usage.HourlyUsage.Rancher),
+		len(usage.ResourcesUsage),
+	)
+
 	// Process instances (compute)
 	for _, instance := range usage.HourlyUsage.Instance {
+		log.Debugf("OVH Cloud Cost: processing instance %s (region=%s, price=%f, details=%d)",
+			instance.Reference, instance.Region, instance.TotalPrice, len(instance.Details))
 		for _, detail := range instance.Details {
 			cc := cci.createCloudCost(
 				detail.ResourceID,
@@ -200,6 +213,8 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 
 	// Process MKS (Managed Kubernetes Service)
 	for _, mks := range usage.HourlyUsage.ManagedKubernetesService {
+		log.Debugf("OVH Cloud Cost: processing MKS %s (region=%s, price=%f, details=%d)",
+			mks.Reference, mks.Region, mks.TotalPrice.Value, len(mks.Details))
 		for _, detail := range mks.Details {
 			cc := cci.createCloudCost(
 				detail.ResourceID,
