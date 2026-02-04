@@ -11,6 +11,7 @@ import (
 	"github.com/opencost/opencost/pkg/cloud/azure"
 	"github.com/opencost/opencost/pkg/cloud/gcp"
 	"github.com/opencost/opencost/pkg/cloud/oracle"
+	"github.com/opencost/opencost/pkg/cloud/ovh"
 )
 
 // MultiCloudConfig struct is used to unmarshal cloud configs for each provider out of cloud-integration file
@@ -68,6 +69,7 @@ type Configurations struct {
 	Azure   *AzureConfigs   `json:"azure,omitempty"`
 	Alibaba *AlibabaConfigs `json:"alibaba,omitempty"`
 	OCI     *OCIConfigs     `json:"oci,omitempty"`
+	OVH     *OVHConfigs     `json:"ovh,omitempty"`
 }
 
 // UnmarshalJSON custom json unmarshalling to maintain support for MultiCloudConfig format
@@ -122,6 +124,10 @@ func (c *Configurations) Equals(that *Configurations) bool {
 		return false
 	}
 
+	if !c.OVH.Equals(that.OVH) {
+		return false
+	}
+
 	return true
 }
 
@@ -157,6 +163,11 @@ func (c *Configurations) Insert(keyedConfig cloud.Config) error {
 			c.OCI = &OCIConfigs{}
 		}
 		c.OCI.UsageAPI = append(c.OCI.UsageAPI, keyedConfig.(*oracle.UsageApiConfiguration))
+	case *ovh.CloudCostConfiguration:
+		if c.OVH == nil {
+			c.OVH = &OVHConfigs{}
+		}
+		c.OVH.CloudCost = append(c.OVH.CloudCost, keyedConfig.(*ovh.CloudCostConfiguration))
 	default:
 		return fmt.Errorf("Configurations: Insert: failed to insert config of type: %T", keyedConfig)
 	}
@@ -196,6 +207,12 @@ func (c *Configurations) ToSlice() []cloud.KeyedConfig {
 	if c.OCI != nil {
 		for _, usageConfig := range c.OCI.UsageAPI {
 			keyedConfigs = append(keyedConfigs, usageConfig)
+		}
+	}
+
+	if c.OVH != nil {
+		for _, ovhConfig := range c.OVH.CloudCost {
+			keyedConfigs = append(keyedConfigs, ovhConfig)
 		}
 	}
 
@@ -337,5 +354,28 @@ func (oc *OCIConfigs) Equals(that *OCIConfigs) bool {
 		}
 	}
 
+	return true
+}
+
+type OVHConfigs struct {
+	CloudCost []*ovh.CloudCostConfiguration `json:"cloudCost,omitempty"`
+}
+
+func (oc *OVHConfigs) Equals(that *OVHConfigs) bool {
+	if oc == nil && that == nil {
+		return true
+	}
+	if oc == nil || that == nil {
+		return false
+	}
+	if len(oc.CloudCost) != len(that.CloudCost) {
+		return false
+	}
+	for i, thisConfig := range oc.CloudCost {
+		thatConfig := that.CloudCost[i]
+		if !thisConfig.Equals(thatConfig) {
+			return false
+		}
+	}
 	return true
 }
