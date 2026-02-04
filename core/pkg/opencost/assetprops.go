@@ -196,8 +196,11 @@ const DigitalOceanProvider = "DigitalOcean"
 // OVHProvider describes the provider OVHcloud
 const OVHProvider = "OVH"
 
-// OVHNodepoolLabel describes how OVH labels nodepool nodes
+// OVHNodepoolLabel describes how OVH labels nodepool nodes (newer MKS clusters)
 const OVHNodepoolLabel = "k8s.ovh.net/nodepool"
+
+// OVHNodeTypeLabel describes an alternative OVH node label (older MKS clusters)
+const OVHNodeTypeLabel = "node.k8s.ovh/type"
 
 // NilProvider describes unknown provider
 const NilProvider = "-"

@@ -308,6 +308,10 @@ func getClusterProperties(node *clustercache.Node) clusterProperties {
 		log.Debug("using OVH provider")
 		cp.provider = opencost.OVHProvider
 		cp.configFileName = "ovh.json"
+	} else if _, ok := node.Labels["node.k8s.ovh/type"]; ok { // Alternative OVH node label
+		log.Debug("using OVH provider (node.k8s.ovh/type)")
+		cp.provider = opencost.OVHProvider
+		cp.configFileName = "ovh.json"
 	} else if strings.HasPrefix(providerID, "digitalocean") {
 		log.Debug("using DigitalOcean provider")
 		cp.provider = opencost.DigitalOceanProvider
