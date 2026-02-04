@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ovh/go-ovh/ovh"
-
 	"github.com/opencost/opencost/core/pkg/log"
 	"github.com/opencost/opencost/core/pkg/opencost"
 	"github.com/opencost/opencost/pkg/cloud"
@@ -117,6 +115,15 @@ type UsageResponse struct {
 	} `json:"period"`
 }
 
+// HistoryPeriod represents a billing period from the /usage/history endpoint
+type HistoryPeriod struct {
+	ID     string `json:"id"`
+	Period struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"period"`
+}
+
 func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*opencost.CloudCostSetRange, error) {
 	client, err := cci.Authorizer.CreateOVHClient()
 	if err != nil {
@@ -129,16 +136,82 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 		return nil, err
 	}
 
-	// OVH usage API returns data for the current billing period
-	// We need to fetch /cloud/project/{projectID}/usage/current
-	var usage UsageResponse
-	err = client.Get(fmt.Sprintf("/cloud/project/%s/usage/current", cci.ProjectID), &usage)
+	dataLoaded := false
+
+	// 1. Fetch current month usage
+	var currentUsage UsageResponse
+	err = client.Get(fmt.Sprintf("/cloud/project/%s/usage/current", cci.ProjectID), &currentUsage)
 	if err != nil {
-		cci.ConnectionStatus = cloud.FailedConnection
-		return nil, fmt.Errorf("failed to fetch OVH usage: %w", err)
+		log.Warnf("OVH Cloud Cost: failed to fetch current usage: %v", err)
+	} else {
+		loaded := cci.processUsagePeriod(&currentUsage, ccsr, start, end)
+		dataLoaded = dataLoaded || loaded
 	}
 
-	log.Infof("OVH Cloud Cost: fetched usage data for period %s to %s", usage.Period.From, usage.Period.To)
+	// 2. Fetch historical usage for previous months
+	var historyPeriods []HistoryPeriod
+	err = client.Get(fmt.Sprintf("/cloud/project/%s/usage/history", cci.ProjectID), &historyPeriods)
+	if err != nil {
+		log.Warnf("OVH Cloud Cost: failed to fetch usage history: %v", err)
+	} else {
+		log.Infof("OVH Cloud Cost: found %d historical billing periods", len(historyPeriods))
+		for _, period := range historyPeriods {
+			// Parse period dates to check if it overlaps with our window
+			periodStart, err := cci.parseOVHDate(period.Period.From)
+			if err != nil {
+				continue
+			}
+
+			// Only fetch detailed data if period might overlap with our window
+			if !periodStart.Before(end) || periodStart.AddDate(0, 1, 0).Before(start) {
+				continue
+			}
+
+			// Fetch detailed usage for this historical period
+			var historicalUsage UsageResponse
+			err = client.Get(fmt.Sprintf("/cloud/project/%s/usage/%s", cci.ProjectID, period.ID), &historicalUsage)
+			if err != nil {
+				log.Warnf("OVH Cloud Cost: failed to fetch historical usage %s: %v", period.ID, err)
+				continue
+			}
+
+			loaded := cci.processUsagePeriod(&historicalUsage, ccsr, start, end)
+			dataLoaded = dataLoaded || loaded
+		}
+	}
+
+	if !dataLoaded {
+		cci.ConnectionStatus = cloud.MissingData
+	} else {
+		cci.ConnectionStatus = cloud.SuccessfulConnection
+	}
+
+	return ccsr, nil
+}
+
+// parseOVHDate parses dates from OVH API responses
+func (cci *CloudCostIntegration) parseOVHDate(dateStr string) (time.Time, error) {
+	// Try RFC3339 first
+	t, err := time.Parse(time.RFC3339, dateStr)
+	if err == nil {
+		return t, nil
+	}
+	// Try alternative format
+	t, err = time.Parse("2006-01-02T15:04:05.000Z", dateStr)
+	if err == nil {
+		return t, nil
+	}
+	// Try date only
+	t, err = time.Parse("2006-01-02", dateStr)
+	if err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("failed to parse date: %s", dateStr)
+}
+
+// processUsagePeriod processes usage data for a single billing period
+func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *opencost.CloudCostSetRange, start, end time.Time) bool {
+	log.Infof("OVH Cloud Cost: processing usage data for period %s to %s", usage.Period.From, usage.Period.To)
 	log.Infof("OVH Cloud Cost: instances=%d, volumes=%d, snapshots=%d, storage=%d, mks=%d, rancher=%d, resourcesUsage=%d",
 		len(usage.HourlyUsage.Instance),
 		len(usage.HourlyUsage.Volume),
@@ -149,29 +222,21 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 		len(usage.ResourcesUsage),
 	)
 
-	// Parse the billing period start date from OVH response
-	// OVH returns cumulative costs for the billing period, so we assign them to the period start date
-	billingStart, err := time.Parse(time.RFC3339, usage.Period.From)
+	// Parse the billing period start date
+	billingStart, err := cci.parseOVHDate(usage.Period.From)
 	if err != nil {
-		// Try alternative format
-		billingStart, err = time.Parse("2006-01-02T15:04:05.000Z", usage.Period.From)
-		if err != nil {
-			log.Warnf("OVH Cloud Cost: failed to parse billing period start date %s: %v", usage.Period.From, err)
-			billingStart = start
-		}
+		log.Warnf("OVH Cloud Cost: failed to parse billing period start date %s: %v", usage.Period.From, err)
+		return false
 	}
 
 	// Only load costs if the requested window includes the billing period start date
-	// This prevents duplicate data when multiple windows are queried
 	if billingStart.Before(start) || !billingStart.Before(end) {
-		log.Debugf("OVH Cloud Cost: skipping data for window [%s, %s) - billing period starts at %s",
-			start.Format(time.RFC3339), end.Format(time.RFC3339), billingStart.Format(time.RFC3339))
-		cci.ConnectionStatus = cloud.SuccessfulConnection
-		return ccsr, nil
+		log.Debugf("OVH Cloud Cost: skipping period starting %s - outside window [%s, %s)",
+			billingStart.Format(time.RFC3339), start.Format(time.RFC3339), end.Format(time.RFC3339))
+		return false
 	}
 
-	log.Infof("OVH Cloud Cost: loading data for billing period starting %s into window [%s, %s)",
-		billingStart.Format(time.RFC3339), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	log.Infof("OVH Cloud Cost: loading data for billing period starting %s", billingStart.Format(time.RFC3339))
 
 	// Use the billing period start date for all costs
 	costDate := billingStart
@@ -273,7 +338,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 	}
 
 	// Process resourcesUsage for additional services
-	cci.processResourcesUsage(client, &usage, ccsr, costDate)
+	cci.processResourcesUsageData(usage, ccsr, costDate)
 
 	// Check if we got any data
 	hasData := len(usage.HourlyUsage.Instance) > 0 ||
@@ -284,16 +349,10 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 		len(usage.HourlyUsage.Rancher) > 0 ||
 		len(usage.ResourcesUsage) > 0
 
-	if !hasData && cci.ConnectionStatus != cloud.SuccessfulConnection {
-		cci.ConnectionStatus = cloud.MissingData
-		return ccsr, nil
-	}
-
-	cci.ConnectionStatus = cloud.SuccessfulConnection
-	return ccsr, nil
+	return hasData
 }
 
-func (cci *CloudCostIntegration) processResourcesUsage(client *ovh.Client, usage *UsageResponse, ccsr *opencost.CloudCostSetRange, costDate time.Time) {
+func (cci *CloudCostIntegration) processResourcesUsageData(usage *UsageResponse, ccsr *opencost.CloudCostSetRange, costDate time.Time) {
 	for _, resourceGroup := range usage.ResourcesUsage {
 		for _, resource := range resourceGroup.Resources {
 			for _, component := range resource.Components {
