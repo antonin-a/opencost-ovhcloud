@@ -10,6 +10,7 @@ import (
 	"github.com/opencost/opencost/pkg/cloud/azure"
 	"github.com/opencost/opencost/pkg/cloud/gcp"
 	"github.com/opencost/opencost/pkg/cloud/oracle"
+	"github.com/opencost/opencost/pkg/cloud/ovh"
 )
 
 const (
@@ -18,6 +19,7 @@ const (
 	BigQueryConfigType     = "bigquery"
 	AzureStorageConfigType = "azurestorage"
 	UsageApiConfigType     = "usageapi"
+	OVHCloudCostConfigType = "ovhcloudcost"
 )
 
 func ConfigTypeFromConfig(config cloud.KeyedConfig) (string, error) {
@@ -32,6 +34,8 @@ func ConfigTypeFromConfig(config cloud.KeyedConfig) (string, error) {
 		return AzureStorageConfigType, nil
 	case *oracle.UsageApiConfiguration:
 		return UsageApiConfigType, nil
+	case *ovh.CloudCostConfiguration:
+		return OVHCloudCostConfigType, nil
 	}
 	return "", fmt.Errorf("failed to determine config type for config with key: %s, type %T", config.Key(), config)
 }
