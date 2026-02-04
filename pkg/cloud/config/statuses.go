@@ -124,6 +124,8 @@ func (s *Status) UnmarshalJSON(b []byte) error {
 		config = &azure.StorageConfiguration{}
 	case UsageApiConfigType:
 		config = &oracle.UsageApiConfiguration{}
+	case OVHCloudCostConfigType:
+		config = &ovh.CloudCostConfiguration{}
 	default:
 		return fmt.Errorf("Status: UnmarshalJSON: config type '%s' is not recognized", configType)
 	}
