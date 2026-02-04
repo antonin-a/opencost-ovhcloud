@@ -169,7 +169,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 
 			// Fetch detailed usage for this historical period
 			var historicalUsage UsageResponse
-			err = client.Get(fmt.Sprintf("/cloud/project/%s/usage/%s", cci.ProjectID, period.ID), &historicalUsage)
+			err = client.Get(fmt.Sprintf("/cloud/project/%s/usage/history/%s", cci.ProjectID, period.ID), &historicalUsage)
 			if err != nil {
 				log.Warnf("OVH Cloud Cost: failed to fetch historical usage %s: %v", period.ID, err)
 				continue
