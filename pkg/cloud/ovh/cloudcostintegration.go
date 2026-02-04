@@ -138,35 +138,10 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 
 	dataLoaded := false
 
-	// TEST: Try fetching usage with date parameters for daily granularity
-	// This tests if OVH API supports date-range queries
-	testDate := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02") // Yesterday
-	testDateEnd := time.Now().UTC().Format("2006-01-02")                 // Today
-
-	var testUsage UsageResponse
-	testURL := fmt.Sprintf("/cloud/project/%s/usage/current?from=%s&to=%s", cci.ProjectID, testDate, testDateEnd)
-	log.Infof("OVH Cloud Cost TEST: trying date-range query: %s", testURL)
-	err = client.Get(testURL, &testUsage)
-	if err != nil {
-		log.Infof("OVH Cloud Cost TEST: date-range query failed (expected): %v", err)
-	} else {
-		log.Infof("OVH Cloud Cost TEST: date-range query succeeded! Period: %s to %s", testUsage.Period.From, testUsage.Period.To)
-		log.Infof("OVH Cloud Cost TEST: instances=%d, mks=%d", len(testUsage.HourlyUsage.Instance), len(testUsage.HourlyUsage.ManagedKubernetesService))
-	}
-
-	// Also try the /usage/history endpoint with date parameters
-	testHistoryURL := fmt.Sprintf("/cloud/project/%s/usage/history?from=%sT00:00:00Z&to=%sT23:59:59Z", cci.ProjectID, testDate, testDateEnd)
-	log.Infof("OVH Cloud Cost TEST: trying history date-range query: %s", testHistoryURL)
-	var testHistoryPeriods []HistoryPeriod
-	err = client.Get(testHistoryURL, &testHistoryPeriods)
-	if err != nil {
-		log.Infof("OVH Cloud Cost TEST: history date-range query failed: %v", err)
-	} else {
-		log.Infof("OVH Cloud Cost TEST: history date-range query returned %d periods", len(testHistoryPeriods))
-		for _, p := range testHistoryPeriods {
-			log.Infof("OVH Cloud Cost TEST: period ID=%s, from=%s, to=%s", p.ID, p.Period.From, p.Period.To)
-		}
-	}
+	// Note: OVH API does not support date range parameters for usage queries.
+	// The /usage/current endpoint always returns cumulative monthly data.
+	// We use the billing period window and let LoadCloudCost distribute costs
+	// proportionally across daily buckets using GetPercentInWindow.
 
 	// 1. Fetch current month usage
 	var currentUsage UsageResponse
