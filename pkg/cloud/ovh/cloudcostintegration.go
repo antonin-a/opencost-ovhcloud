@@ -222,24 +222,44 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 		len(usage.ResourcesUsage),
 	)
 
-	// Parse the billing period start date
+	// Parse the billing period dates
 	billingStart, err := cci.parseOVHDate(usage.Period.From)
 	if err != nil {
 		log.Warnf("OVH Cloud Cost: failed to parse billing period start date %s: %v", usage.Period.From, err)
 		return false
 	}
 
-	// Only load costs if the requested window includes the billing period start date
-	if billingStart.Before(start) || !billingStart.Before(end) {
-		log.Debugf("OVH Cloud Cost: skipping period starting %s - outside window [%s, %s)",
-			billingStart.Format(time.RFC3339), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	billingEnd, err := cci.parseOVHDate(usage.Period.To)
+	if err != nil {
+		log.Warnf("OVH Cloud Cost: failed to parse billing period end date %s: %v", usage.Period.To, err)
+		billingEnd = billingStart.AddDate(0, 1, 0) // Default to 1 month
+	}
+
+	// Determine the effective date range for cost distribution
+	// For current month: use from billingStart to now
+	// For historical months: use the full billing period
+	now := time.Now().UTC().Truncate(24 * time.Hour)
+	effectiveEnd := billingEnd
+	if billingEnd.After(now) {
+		effectiveEnd = now.Add(24 * time.Hour) // Include today
+	}
+
+	// Calculate the number of days in the billing period (for cost distribution)
+	totalDays := int(effectiveEnd.Sub(billingStart).Hours() / 24)
+	if totalDays < 1 {
+		totalDays = 1
+	}
+
+	// Check if billing period overlaps with requested window
+	if billingStart.After(end) || effectiveEnd.Before(start) {
+		log.Debugf("OVH Cloud Cost: skipping period [%s, %s) - no overlap with window [%s, %s)",
+			billingStart.Format(time.RFC3339), effectiveEnd.Format(time.RFC3339),
+			start.Format(time.RFC3339), end.Format(time.RFC3339))
 		return false
 	}
 
-	log.Infof("OVH Cloud Cost: loading data for billing period starting %s", billingStart.Format(time.RFC3339))
-
-	// Use the billing period start date for all costs
-	costDate := billingStart
+	log.Infof("OVH Cloud Cost: distributing costs for period [%s, %s) across %d days",
+		billingStart.Format(time.RFC3339), effectiveEnd.Format(time.RFC3339), totalDays)
 
 	// Process instances (compute)
 	for _, instance := range usage.HourlyUsage.Instance {
@@ -253,7 +273,8 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 				opencost.ComputeCategory,
 				instance.Region,
 				detail.TotalPrice,
-				costDate,
+				billingStart,
+				effectiveEnd,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
@@ -269,7 +290,8 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 				opencost.StorageCategory,
 				volume.Region,
 				detail.TotalPrice,
-				costDate,
+				billingStart,
+				effectiveEnd,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
@@ -284,7 +306,8 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 			opencost.StorageCategory,
 			snapshot.Region,
 			snapshot.TotalPrice,
-			costDate,
+			billingStart,
+			effectiveEnd,
 		)
 		ccsr.LoadCloudCost(cc)
 	}
@@ -298,7 +321,8 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 			opencost.StorageCategory,
 			storage.Region,
 			storage.TotalPrice,
-			costDate,
+			billingStart,
+			effectiveEnd,
 		)
 		ccsr.LoadCloudCost(cc)
 	}
@@ -315,7 +339,8 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 				opencost.ManagementCategory,
 				mks.Region,
 				detail.TotalPrice.Value,
-				costDate,
+				billingStart,
+				effectiveEnd,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
@@ -331,14 +356,15 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 				opencost.ManagementCategory,
 				"",
 				detail.TotalPrice.Value,
-				costDate,
+				billingStart,
+				effectiveEnd,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
 	}
 
 	// Process resourcesUsage for additional services
-	cci.processResourcesUsageData(usage, ccsr, costDate)
+	cci.processResourcesUsageData(usage, ccsr, billingStart, effectiveEnd)
 
 	// Check if we got any data
 	hasData := len(usage.HourlyUsage.Instance) > 0 ||
@@ -352,7 +378,7 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 	return hasData
 }
 
-func (cci *CloudCostIntegration) processResourcesUsageData(usage *UsageResponse, ccsr *opencost.CloudCostSetRange, costDate time.Time) {
+func (cci *CloudCostIntegration) processResourcesUsageData(usage *UsageResponse, ccsr *opencost.CloudCostSetRange, windowStart, windowEnd time.Time) {
 	for _, resourceGroup := range usage.ResourcesUsage {
 		for _, resource := range resourceGroup.Resources {
 			for _, component := range resource.Components {
@@ -364,7 +390,8 @@ func (cci *CloudCostIntegration) processResourcesUsageData(usage *UsageResponse,
 					category,
 					"",
 					component.TotalPrice,
-					costDate,
+					windowStart,
+					windowEnd,
 				)
 				ccsr.LoadCloudCost(cc)
 			}
@@ -459,9 +486,8 @@ func (cci *CloudCostIntegration) createCloudCost(
 	region string,
 	cost float64,
 	windowStart time.Time,
+	windowEnd time.Time,
 ) *opencost.CloudCost {
-	windowEnd := windowStart.AddDate(0, 0, 1)
-
 	labels := opencost.CloudCostLabels{
 		"product": productName,
 	}
