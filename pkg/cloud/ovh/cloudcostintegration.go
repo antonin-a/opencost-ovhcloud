@@ -125,6 +125,9 @@ type HistoryPeriod struct {
 }
 
 func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*opencost.CloudCostSetRange, error) {
+	log.Infof("OVH Cloud Cost DEBUG: GetCloudCost called with start=%s, end=%s",
+		start.Format(time.RFC3339), end.Format(time.RFC3339))
+
 	client, err := cci.Authorizer.CreateOVHClient()
 	if err != nil {
 		cci.ConnectionStatus = cloud.FailedConnection
@@ -245,8 +248,11 @@ func (cci *CloudCostIntegration) processUsagePeriod(usage *UsageResponse, ccsr *
 	// For historical months: use the full billing period
 	now := time.Now().UTC().Truncate(24 * time.Hour)
 	effectiveEnd := billingEnd
+	log.Infof("OVH Cloud Cost DEBUG: billingStart=%s, billingEnd=%s, now=%s",
+		billingStart.Format(time.RFC3339), billingEnd.Format(time.RFC3339), now.Format(time.RFC3339))
 	if billingEnd.After(now) {
 		effectiveEnd = now.Add(24 * time.Hour) // Include today
+		log.Infof("OVH Cloud Cost DEBUG: billingEnd is in the future, using effectiveEnd=%s", effectiveEnd.Format(time.RFC3339))
 	}
 
 	// Calculate the number of days in the billing period (for cost distribution)
@@ -493,6 +499,13 @@ func (cci *CloudCostIntegration) createCloudCost(
 	windowStart time.Time,
 	windowEnd time.Time,
 ) *opencost.CloudCost {
+	// Debug: log the window being created
+	durationDays := windowEnd.Sub(windowStart).Hours() / 24
+	log.Infof("OVH Cloud Cost DEBUG: createCloudCost resourceID=%s, cost=%.2f, window=[%s, %s), duration=%.1f days",
+		resourceID, cost,
+		windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339),
+		durationDays)
+
 	labels := opencost.CloudCostLabels{
 		"product": productName,
 	}
