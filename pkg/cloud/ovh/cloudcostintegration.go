@@ -149,6 +149,33 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 		len(usage.ResourcesUsage),
 	)
 
+	// Parse the billing period start date from OVH response
+	// OVH returns cumulative costs for the billing period, so we assign them to the period start date
+	billingStart, err := time.Parse(time.RFC3339, usage.Period.From)
+	if err != nil {
+		// Try alternative format
+		billingStart, err = time.Parse("2006-01-02T15:04:05.000Z", usage.Period.From)
+		if err != nil {
+			log.Warnf("OVH Cloud Cost: failed to parse billing period start date %s: %v", usage.Period.From, err)
+			billingStart = start
+		}
+	}
+
+	// Only load costs if the requested window includes the billing period start date
+	// This prevents duplicate data when multiple windows are queried
+	if billingStart.Before(start) || !billingStart.Before(end) {
+		log.Debugf("OVH Cloud Cost: skipping data for window [%s, %s) - billing period starts at %s",
+			start.Format(time.RFC3339), end.Format(time.RFC3339), billingStart.Format(time.RFC3339))
+		cci.ConnectionStatus = cloud.SuccessfulConnection
+		return ccsr, nil
+	}
+
+	log.Infof("OVH Cloud Cost: loading data for billing period starting %s into window [%s, %s)",
+		billingStart.Format(time.RFC3339), start.Format(time.RFC3339), end.Format(time.RFC3339))
+
+	// Use the billing period start date for all costs
+	costDate := billingStart
+
 	// Process instances (compute)
 	for _, instance := range usage.HourlyUsage.Instance {
 		log.Debugf("OVH Cloud Cost: processing instance %s (region=%s, price=%f, details=%d)",
@@ -161,7 +188,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 				opencost.ComputeCategory,
 				instance.Region,
 				detail.TotalPrice,
-				start,
+				costDate,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
@@ -177,7 +204,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 				opencost.StorageCategory,
 				volume.Region,
 				detail.TotalPrice,
-				start,
+				costDate,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
@@ -192,7 +219,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 			opencost.StorageCategory,
 			snapshot.Region,
 			snapshot.TotalPrice,
-			start,
+			costDate,
 		)
 		ccsr.LoadCloudCost(cc)
 	}
@@ -206,7 +233,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 			opencost.StorageCategory,
 			storage.Region,
 			storage.TotalPrice,
-			start,
+			costDate,
 		)
 		ccsr.LoadCloudCost(cc)
 	}
@@ -223,7 +250,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 				opencost.ManagementCategory,
 				mks.Region,
 				detail.TotalPrice.Value,
-				start,
+				costDate,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
@@ -239,14 +266,14 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 				opencost.ManagementCategory,
 				"",
 				detail.TotalPrice.Value,
-				start,
+				costDate,
 			)
 			ccsr.LoadCloudCost(cc)
 		}
 	}
 
 	// Process resourcesUsage for additional services
-	cci.processResourcesUsage(client, &usage, ccsr, start)
+	cci.processResourcesUsage(client, &usage, ccsr, costDate)
 
 	// Check if we got any data
 	hasData := len(usage.HourlyUsage.Instance) > 0 ||
@@ -266,7 +293,7 @@ func (cci *CloudCostIntegration) GetCloudCost(start time.Time, end time.Time) (*
 	return ccsr, nil
 }
 
-func (cci *CloudCostIntegration) processResourcesUsage(client *ovh.Client, usage *UsageResponse, ccsr *opencost.CloudCostSetRange, start time.Time) {
+func (cci *CloudCostIntegration) processResourcesUsage(client *ovh.Client, usage *UsageResponse, ccsr *opencost.CloudCostSetRange, costDate time.Time) {
 	for _, resourceGroup := range usage.ResourcesUsage {
 		for _, resource := range resourceGroup.Resources {
 			for _, component := range resource.Components {
@@ -278,7 +305,7 @@ func (cci *CloudCostIntegration) processResourcesUsage(client *ovh.Client, usage
 					category,
 					"",
 					component.TotalPrice,
-					start,
+					costDate,
 				)
 				ccsr.LoadCloudCost(cc)
 			}
